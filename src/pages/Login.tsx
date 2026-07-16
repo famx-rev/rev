@@ -1,6 +1,6 @@
 import { useState, FormEvent, ReactNode } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, User, KeyRound, CheckCircle2, ArrowLeft, FileText, Shield, ChevronRight } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, User, KeyRound, CheckCircle2, ArrowLeft, FileText, Shield, ChevronRight, ClipboardPaste } from 'lucide-react';
 
 const API_BASE = 'https://api-eight-navy-68.vercel.app/api/authx/710ff547-b7c1-4287-b9e7-5045bc86cd3e';
 const LOGO_URL = 'https://idealfrank.sirv.com/rev_by_famx_gradient.png';
@@ -276,6 +276,17 @@ export default function Login() {
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
+    const [pasteError, setPasteError] = useState<string | null>(null);
+
+    const handlePaste = async () => {
+      setPasteError(null);
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) setToken(text.trim());
+      } catch {
+        setPasteError('Could not read clipboard. Paste manually instead (Ctrl/Cmd+V).');
+      }
+    };
 
     const handleSubmit = async (e: FormEvent) => {
       e.preventDefault();
@@ -300,9 +311,26 @@ export default function Login() {
 
     return (
       <form onSubmit={handleSubmit} className="p-6 space-y-4">
-        <Field icon={<KeyRound className="h-[18px] w-[18px]" />} label="Reset Token">
-          <input type="text" value={token} onChange={(e) => setToken(e.target.value)} required disabled={submitting} placeholder="paste your reset token" className={inputClass('pr-3') + ' font-mono text-[13px]'} />
+        <Field icon={<KeyRound className="h-[18px] w-[18px]" />} label="Reset Code">
+          <input
+            type="text"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            required
+            disabled={submitting}
+            placeholder="paste your reset code"
+            className={inputClass('pr-24') + ' font-mono text-[13px]'}
+          />
+          <button
+            type="button"
+            onClick={handlePaste}
+            disabled={submitting}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2.5 py-1.5 bg-[#F0EEE6] dark:bg-[#33322E] hover:bg-[#E5E3DD] dark:hover:bg-[#3D3D3A] text-[#3D3929] dark:text-[#E8E6DC] text-[12px] font-medium rounded-md transition-colors"
+          >
+            <ClipboardPaste className="h-[14px] w-[14px]" /> Paste
+          </button>
         </Field>
+        {pasteError && <p className="text-[12px] text-[#B4451F] dark:text-[#E89B7E] -mt-2">{pasteError}</p>}
 
         <Field icon={<Lock className="h-[18px] w-[18px]" />} label="New Password">
           <input type={showPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required disabled={submitting} placeholder="••••••••" className={inputClass('pr-10')} />
@@ -315,7 +343,7 @@ export default function Login() {
         {success && <SuccessBox message={success} />}
 
         <button type="submit" disabled={submitting} className={btnClass()}>
-          {submitting ? <><Loader2 className="h-[18px] w-[18px] animate-spin" /> Resetting...</> : <>Reset password <ChevronRight className="h-4 w-4" /></>}
+          {submitting ? <><Loader2 className="h-[18px] w-[18px] animate-spin" /> Resetting...</> : <>OK <ChevronRight className="h-4 w-4" /></>}
         </button>
 
         <BackLink onSwitch={onSwitch} />
