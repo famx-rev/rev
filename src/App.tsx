@@ -7,6 +7,7 @@ import Visitors from './pages/Visitors';
 import Projects from './pages/Projects';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
+import Landing from './pages/Landing';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider, useTheme, ThemeMode } from './auth/ThemeContext';
 import { LayoutDashboard, FileText, List, Video, FolderOpen, ChevronDown, LogOut, User, Settings as SettingsIcon, Globe as Globe2, Sun, Moon, Monitor, Zap, Mail, MessageSquare, Check, Copy } from 'lucide-react';
@@ -161,6 +162,7 @@ function DashboardApp() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [openDropdown, setOpenDropdown] = useState<DropdownId>(null);
+  const [showLanding, setShowLanding] = useState(true);
   const sidebarRef = useRef<HTMLElement>(null);
 
   const closeDropdowns = () => setOpenDropdown(null);
@@ -221,7 +223,10 @@ function DashboardApp() {
   }
 
   if (!user) {
-    return <Login />;
+    if (showLanding) {
+      return <Landing onEnterApp={() => setShowLanding(false)} />;
+    }
+    return <Login onBackHome={() => setShowLanding(true)} />;
   }
 
   const userDisplayName = user.name || user.email || 'User';
