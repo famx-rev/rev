@@ -118,7 +118,16 @@ function Sessions() {
   const cleanupPlayer = useCallback(() => {
     if (playerRef.current) {
       try {
-        playerRef.current.destroy();
+        // rrweb-player is a Svelte component instance — the correct teardown
+        // method is $destroy(), not destroy(). Calling the wrong name silently
+        // fails, leaves the old instance alive, and causes corrupted state
+        // (stale DOM mirror, orphaned node IDs) when a new player initializes
+        // on top of it during fast seeking/switching.
+        if (typeof playerRef.current.$destroy === 'function') {
+          playerRef.current.$destroy();
+        } else if (typeof playerRef.current.destroy === 'function') {
+          playerRef.current.destroy();
+        }
       } catch (e) {
         console.warn('Error destroying player:', e);
       }
@@ -165,18 +174,37 @@ function Sessions() {
     // Clear the container
     containerRef.current.innerHTML = '';
 
+    // Guards against a race when switching sessions or seeking quickly: if this
+    // effect gets cleaned up (a newer selection came in) before the async
+    // import/init below finishes, we must not let the stale result overwrite
+    // the newer player or touch a container that's since been reused.
+    let cancelled = false;
+
     const initPlayer = async () => {
       try {
         const { default: rrwebPlayer } = await import('rrweb-player');
         await import('rrweb-player/dist/style.css');
 
+        if (cancelled || !containerRef.current) return;
+
         const events = selectedSession.events;
 
-        // Find first Meta event and first FullSnapshot
-        let metaEvent = events.find((e: any) => e.type === 4); // Meta event
-        let fullSnapshot = events.find((e: any) => e.type === 2); // FullSnapshot
+        // A session can legitimately contain MORE THAN ONE FullSnapshot (type 2):
+        // one at initial recording start, and another any time recording restarts
+        // mid-session (e.g. after an inactivity pause resumes, or when mouse-tracking
+        // mode changes). rrweb's Replayer is built to handle multiple snapshots in one
+        // timeline — it rebuilds its DOM mirror at each one. So we must NOT filter
+        // down to only the first snapshot; keep every Meta / FullSnapshot / Incremental
+        // event and just sort them by time. Dropping later snapshots while keeping the
+        // incrementals that follow them is what causes "Node with id X not found" and
+        // corrupted playback.
+        const orderedEvents = events
+          .filter((e: any) => e.type === 2 || e.type === 3 || e.type === 4)
+          .sort((a: any, b: any) => a.timestamp - b.timestamp);
 
-        // If we don't have a FullSnapshot, we can't replay properly
+        const fullSnapshot = orderedEvents.find((e: any) => e.type === 2); // used below only for sizing
+
+        // If we don't have any FullSnapshot, we can't replay properly
         if (!fullSnapshot) {
           containerRef.current!.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: center; height: 300px; color: #6b7280; background: #f3f4f6; border-radius: 8px;">
@@ -185,23 +213,6 @@ function Sessions() {
           `;
           return;
         }
-
-        // Build proper event sequence: Meta -> FullSnapshot -> IncrementalSnapshots
-        let orderedEvents: any[] = [];
-
-        if (metaEvent) {
-          orderedEvents.push(metaEvent);
-        }
-        orderedEvents.push(fullSnapshot);
-
-        // Add incremental snapshots (type 3)
-        const incrementalSnapshots = events.filter((e: any) =>
-          e.type === 3 && e.timestamp > fullSnapshot.timestamp
-        );
-        orderedEvents.push(...incrementalSnapshots);
-
-        // Sort all events by timestamp
-        orderedEvents.sort((a, b) => a.timestamp - b.timestamp);
 
         // Get the recorded viewport dimensions - prioritize actual viewport over screen
         let recordedWidth = 1280;
@@ -237,6 +248,8 @@ function Sessions() {
         const playerWidth = containerWidth;
         const playerHeight = Math.round(playerWidth / aspectRatio);
 
+        if (cancelled || !containerRef.current) return; // stale by the time we're ready to construct
+
         const newPlayer = new rrwebPlayer({
           target: containerRef.current,
           props: {
@@ -262,9 +275,10 @@ function Sessions() {
         });
 
         playerRef.current = newPlayer;
-        setPlayerDimensions({ width: playerWidth, height: playerHeight });
+        if (!cancelled) setPlayerDimensions({ width: playerWidth, height: playerHeight });
 
       } catch (error) {
+        if (cancelled) return;
         console.error('Error initializing player:', error);
         if (containerRef.current) {
           containerRef.current.innerHTML = `
@@ -278,7 +292,10 @@ function Sessions() {
 
     // Small delay to ensure container is rendered
     const timer = setTimeout(initPlayer, 50);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [selectedSession, cleanupPlayer]);
 
   const handleDeleteSession = async (session: Session) => {
