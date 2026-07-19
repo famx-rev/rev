@@ -71,7 +71,7 @@ function Analytics() {
   };
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const [range, setRange] = useState<Range>('H');
+  const [range, setRange] = useState<Range>('M');
 
   useEffect(() => {
     if (!selectedProject) { setLoading(false); return; }
