@@ -22,7 +22,7 @@ const PLANS: Plan[] = [
   {
     id: 'beta',
     name: 'Beta / SaaS',
-    price: '$1',
+    price: 'FREE trial',
     period: 'one-time',
     tagline: 'Try the full platform.',
     description: 'Everything you need to validate analytics on a single site.',
