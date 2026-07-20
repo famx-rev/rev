@@ -219,11 +219,16 @@ function Settings() {
 
   const handleDeleteProject = async () => {
     if (!selectedProject) return;
+    if (!userId) {
+      alert('Unable to delete project: missing user ID. Please log in again.');
+      return;
+    }
     setDeletingProject(true);
     try {
-      const res = await fetch(`https://api1-orpin.vercel.app/api/projects/${selectedProject.id}`, {
-        method: 'DELETE',
-      });
+      const res = await fetch(
+        `https://api1-orpin.vercel.app/api/projects/${selectedProject.id}?userId=${encodeURIComponent(userId)}`,
+        { method: 'DELETE' }
+      );
       if (res.ok) {
         const updated = projects.filter((p) => p.id !== selectedProject.id);
         setProjects(updated);
