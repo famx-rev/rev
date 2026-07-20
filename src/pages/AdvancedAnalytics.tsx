@@ -73,23 +73,33 @@ function AdvancedAnalytics({ events }: { events: Event[] }) {
     }
 
     let singlePageVisitors = 0;
-    let newCount = 0;
-    let returningCount = 0;
-    const firstSeen = new Map<string, number>();
-    const now = Date.now();
     const SESSION_GAP = 30 * 60 * 1000;
 
-    byVisitor.forEach((evs, vid) => {
+    byVisitor.forEach((evs) => {
       const sorted = [...evs].sort((a, b) => safeTime(a.timestamp) - safeTime(b.timestamp));
       const pageviews = sorted.filter(e => e.eventName === 'pageview');
       if (pageviews.length <= 1) singlePageVisitors++;
-      const first = safeTime(sorted[0].timestamp);
-      if (!isNaN(first)) firstSeen.set(vid, first);
     });
 
-    // New vs returning: first-seen within last 24h = new
-    firstSeen.forEach(t => {
-      if (now - t < 24 * 60 * 60 * 1000) newCount++;
+    // New vs returning: based on session count per visitor within the loaded
+    // event window (a visitor with 2+ distinct sessions, separated by a
+    // 30-min gap, counts as returning). This replaces the old "first event
+    // timestamp within last 24h" check, which always classified everyone as
+    // "new" whenever the events array itself only covered a <=24h window.
+    let newCount = 0;
+    let returningCount = 0;
+
+    byVisitor.forEach((evs) => {
+      const sorted = [...evs].sort((a, b) => safeTime(a.timestamp) - safeTime(b.timestamp));
+      let sessionCount = 0;
+      let lastTs: number | null = null;
+      for (const e of sorted) {
+        const t = safeTime(e.timestamp);
+        if (isNaN(t)) continue;
+        if (lastTs === null || t - lastTs > SESSION_GAP) sessionCount++;
+        lastTs = t;
+      }
+      if (sessionCount <= 1) newCount++;
       else returningCount++;
     });
 
@@ -404,6 +414,3 @@ function AdvancedAnalytics({ events }: { events: Event[] }) {
 }
 
 export default AdvancedAnalytics;
-
-
-
