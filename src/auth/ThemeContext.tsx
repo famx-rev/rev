@@ -29,7 +29,7 @@ function getStoredMode(): ThemeMode {
   if (typeof localStorage === 'undefined') return 'light';
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
-  return 'dark';
+  return 'light';
 }
 
 function applyTheme(mode: ThemeMode): 'light' | 'dark' {
