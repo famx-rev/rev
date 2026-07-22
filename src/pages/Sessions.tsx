@@ -35,22 +35,9 @@ function Sessions() {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // Scroll container + sentinel refs for infinite scroll
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
-
   const [sessionToDelete, setSessionToDelete] = useState<SessionMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<SessionMeta | null>(null);
-
-  // Keep latest hasMore/loadingMore in refs so the observer callback
-  // (created once) always reads fresh values without needing to be re-created.
-  const hasMoreRef = useRef(hasMore);
-  const loadingMoreRef = useRef(loadingMore);
-  const offsetRef = useRef(offset);
-  useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
-  useEffect(() => { loadingMoreRef.current = loadingMore; }, [loadingMore]);
-  useEffect(() => { offsetRef.current = offset; }, [offset]);
 
   // Fetch initial session list metadata
   const fetchSessions = useCallback(async (currentOffset: number, isInitial = false) => {
@@ -108,31 +95,12 @@ function Sessions() {
     fetchSessions(0, true);
   }, [selectedProject, fetchSessions]);
 
-  const handleLoadMore = useCallback(() => {
-    if (loadingMoreRef.current || !hasMoreRef.current) return;
-    const nextOffset = offsetRef.current + PAGE_LIMIT;
+  const handleLoadMore = () => {
+    if (loadingMore || !hasMore) return;
+    const nextOffset = offset + PAGE_LIMIT;
     setOffset(nextOffset);
     fetchSessions(nextOffset, false);
-  }, [fetchSessions]);
-
-  // Auto-load more sessions when the sentinel div scrolls into view
-  useEffect(() => {
-    const sentinel = loadMoreSentinelRef.current;
-    const root = scrollContainerRef.current;
-    if (!sentinel || !root) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          handleLoadMore();
-        }
-      },
-      { root, rootMargin: '150px', threshold: 0 }
-    );
-
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [handleLoadMore, sessions.length > 0]);
+  };
 
   // Fetch complete event payload on demand when playing/viewing details
   const loadFullSession = async (session: SessionMeta): Promise<SessionMeta | null> => {
@@ -408,10 +376,7 @@ function Sessions() {
               <div className="p-4 border-b border-gray-200 dark:border-gray-700">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Sessions ({sessions.length})</h2>
               </div>
-              <div
-                ref={scrollContainerRef}
-                className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[calc(100vh-280px)] overflow-y-auto flex-1"
-              >
+              <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[calc(100vh-280px)] overflow-y-auto flex-1">
                 {sessions.map((session) => (
                   <div
                     key={session.sessionId}
@@ -487,12 +452,23 @@ function Sessions() {
                   </div>
                 ))}
 
-                {/* Infinite scroll sentinel - triggers auto-load when scrolled into view */}
+                {/* Load More Pagination Button */}
                 {hasMore && (
-                  <div ref={loadMoreSentinelRef} className="p-4 flex justify-center items-center h-14">
-                    {loadingMore && (
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600 dark:border-indigo-400" />
-                    )}
+                  <div className="p-4 text-center">
+                    <button
+                      onClick={handleLoadMore}
+                      disabled={loadingMore}
+                      className="w-full py-2 px-4 border border-gray-300 dark:border-gray-700 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                    >
+                      {loadingMore ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600 dark:border-indigo-400" />
+                      ) : (
+                        <>
+                          <ChevronDown className="h-4 w-4" />
+                          Load More Sessions
+                        </>
+                      )}
+                    </button>
                   </div>
                 )}
               </div>
