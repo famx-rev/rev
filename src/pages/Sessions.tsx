@@ -35,6 +35,11 @@ function Sessions() {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
+  // Guards against the "Load More" button firing more than once per
+  // real click (e.g. duplicate events, fast re-renders, or any
+  // non-trusted/synthetic click coming from outside React).
+  const loadMoreLockRef = useRef(false);
+
   const [sessionToDelete, setSessionToDelete] = useState<SessionMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<SessionMeta | null>(null);
@@ -95,11 +100,20 @@ function Sessions() {
     fetchSessions(0, true);
   }, [selectedProject, fetchSessions]);
 
-  const handleLoadMore = () => {
-    if (loadingMore || !hasMore) return;
+  // Only responds to a real, trusted click on the button itself.
+  // `e.isTrusted` is false for any programmatically-dispatched click
+  // (extensions, automation tools, synthetic events), so this can
+  // never "auto-fire" just from hovering or focusing the button.
+  const handleLoadMore = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (!e.isTrusted) return;
+    if (loadMoreLockRef.current || loadingMore || !hasMore) return;
+
+    loadMoreLockRef.current = true;
     const nextOffset = offset + PAGE_LIMIT;
     setOffset(nextOffset);
-    fetchSessions(nextOffset, false);
+    fetchSessions(nextOffset, false).finally(() => {
+      loadMoreLockRef.current = false;
+    });
   };
 
   // Fetch complete event payload on demand when playing/viewing details
@@ -385,6 +399,7 @@ function Sessions() {
                     }`}
                   >
                     <button
+                      type="button"
                       onClick={() => handleSelectSession(session)}
                       className="flex-1 text-left space-y-1"
                     >
@@ -422,6 +437,7 @@ function Sessions() {
                     </button>
                     <div className="flex items-center gap-1">
                       <button
+                        type="button"
                         onClick={() => handleSelectSession(session)}
                         className="p-2 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors"
                         title="Play session"
@@ -429,6 +445,7 @@ function Sessions() {
                         <Play className="h-4 w-4" />
                       </button>
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleOpenInfo(session);
@@ -439,6 +456,7 @@ function Sessions() {
                         <Info className="h-4 w-4" />
                       </button>
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setSessionToDelete(session);
@@ -456,6 +474,7 @@ function Sessions() {
                 {hasMore && (
                   <div className="p-4 text-center">
                     <button
+                      type="button"
                       onClick={handleLoadMore}
                       disabled={loadingMore}
                       className="w-full py-2 px-4 border border-gray-300 dark:border-gray-700 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
@@ -514,6 +533,7 @@ function Sessions() {
                           </div>
                         )}
                         <button
+                          type="button"
                           onClick={() => setSessionToDelete(selectedSession)}
                           className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 rounded-lg transition-colors"
                         >
@@ -577,6 +597,7 @@ function Sessions() {
             </p>
             <div className="flex justify-end gap-3">
               <button
+                type="button"
                 onClick={() => setSessionToDelete(null)}
                 disabled={deleting}
                 className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-50"
@@ -584,6 +605,7 @@ function Sessions() {
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={() => handleDeleteSession(sessionToDelete)}
                 disabled={deleting}
                 className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
@@ -605,7 +627,7 @@ function Sessions() {
                   <Info className="h-4 w-4 text-slate-300" />
                   <h2 className="font-semibold">Session Details</h2>
                 </div>
-                <button onClick={() => setSessionInfo(null)} className="p-1.5 hover:bg-white/10 rounded-lg">
+                <button type="button" onClick={() => setSessionInfo(null)} className="p-1.5 hover:bg-white/10 rounded-lg">
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -632,8 +654,8 @@ function Sessions() {
               </div>
             </div>
             <div className="px-4 py-3 bg-slate-50 dark:bg-gray-800/50 border-t border-slate-100 dark:border-gray-800 flex items-center gap-2">
-              <button onClick={() => setSessionInfo(null)} className="flex-1 py-2 text-sm text-slate-600 dark:text-gray-400 hover:bg-white rounded-lg">Close</button>
-              <button onClick={() => { setSelectedSession(sessionInfo); setSessionInfo(null); }} className="flex-1 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1">
+              <button type="button" onClick={() => setSessionInfo(null)} className="flex-1 py-2 text-sm text-slate-600 dark:text-gray-400 hover:bg-white rounded-lg">Close</button>
+              <button type="button" onClick={() => { setSelectedSession(sessionInfo); setSessionInfo(null); }} className="flex-1 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1">
                 <Play className="h-3.5 w-3.5" /> Play
               </button>
             </div>
