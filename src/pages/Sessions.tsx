@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Play, Calendar, Monitor, User, Clock, Globe, MousePointer, MapPin, Trash2, AlertTriangle, X, Info, ExternalLink, Chrome, ChevronDown } from 'lucide-react';
+import { Play, Calendar, Monitor, User, Clock, Globe, MousePointer, MapPin, Trash2, AlertTriangle, X, Info, ExternalLink, ChevronDown } from 'lucide-react';
 import { useProject } from '../App';
 
 interface SessionMeta {
@@ -35,16 +35,14 @@ function Sessions() {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // Guards against the "Load More" button firing more than once per
-  // real click (e.g. duplicate events, fast re-renders, or any
-  // non-trusted/synthetic click coming from outside React).
-  const loadMoreLockRef = useRef(false);
-
   const [sessionToDelete, setSessionToDelete] = useState<SessionMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<SessionMeta | null>(null);
 
-  // Fetch initial session list metadata
+  // Hover auto-load countdown
+  const [hoverCountdown, setHoverCountdown] = useState<number | null>(null);
+  const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const fetchSessions = useCallback(async (currentOffset: number, isInitial = false) => {
     if (!selectedProject) return;
 
@@ -62,7 +60,6 @@ function Sessions() {
       const data = await res.json();
       const fetchedRows: SessionMeta[] = data.sessions || [];
 
-      // Check if we reached the end of records
       if (fetchedRows.length < PAGE_LIMIT) {
         setHasMore(false);
       } else {
@@ -71,15 +68,12 @@ function Sessions() {
 
       setSessions((prev) => {
         const combined = isInitial ? fetchedRows : [...prev, ...fetchedRows];
-
-        // Deduplicate rows by sessionId
         const map = new Map<string, SessionMeta>();
         combined.forEach((item) => {
           if (item.sessionId && !map.has(item.sessionId)) {
             map.set(item.sessionId, item);
           }
         });
-
         return Array.from(map.values()).sort(
           (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
         );
@@ -100,23 +94,39 @@ function Sessions() {
     fetchSessions(0, true);
   }, [selectedProject, fetchSessions]);
 
-  // Only responds to a real, trusted click on the button itself.
-  // `e.isTrusted` is false for any programmatically-dispatched click
-  // (extensions, automation tools, synthetic events), so this can
-  // never "auto-fire" just from hovering or focusing the button.
-  const handleLoadMore = (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (!e.isTrusted) return;
-    if (loadMoreLockRef.current || loadingMore || !hasMore) return;
+  // Hover Countdown Logic
+  const startHoverCountdown = () => {
+    if (!hasMore || loadingMore) return;
 
-    loadMoreLockRef.current = true;
-    const nextOffset = offset + PAGE_LIMIT;
-    setOffset(nextOffset);
-    fetchSessions(nextOffset, false).finally(() => {
-      loadMoreLockRef.current = false;
-    });
+    setHoverCountdown(3);
+
+    hoverTimerRef.current = setTimeout(() => {
+      setHoverCountdown(2);
+      hoverTimerRef.current = setTimeout(() => {
+        setHoverCountdown(1);
+        hoverTimerRef.current = setTimeout(() => {
+          handleLoadMore();
+          setHoverCountdown(null);
+        }, 700);
+      }, 800);
+    }, 800);
   };
 
-  // Fetch complete event payload on demand when playing/viewing details
+  const cancelHoverCountdown = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoverCountdown(null);
+  };
+
+  const handleLoadMore = () => {
+    if (loadingMore || !hasMore) return;
+    const nextOffset = offset + PAGE_LIMIT;
+    setOffset(nextOffset);
+    fetchSessions(nextOffset, false);
+  };
+
   const loadFullSession = async (session: SessionMeta): Promise<SessionMeta | null> => {
     if (session.events && session.events.length > 0) return session;
 
@@ -174,7 +184,6 @@ function Sessions() {
     }
   };
 
-  // Clean up Svelte instance for rrweb player
   const cleanupPlayer = useCallback(() => {
     if (playerRef.current) {
       try {
@@ -208,7 +217,6 @@ function Sessions() {
 
   useEffect(() => cleanupPlayer, [cleanupPlayer]);
 
-  // Render rrweb Player
   useEffect(() => {
     if (!selectedSession || !containerRef.current) return;
 
@@ -385,11 +393,12 @@ function Sessions() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Session List Column */}
-            <div className="lg:col-span-1 bg-white dark:bg-gray-900 rounded-xl shadow-sm overflow-hidden flex flex-col">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+            {/* Session List */}
+            <div className="lg:col-span-1 bg-white dark:bg-gray-900 rounded-2xl shadow-sm overflow-hidden flex flex-col">
+              <div className="p-5 border-b border-gray-200 dark:border-gray-700 bg-gradient-to-r from-indigo-50 to-white dark:from-gray-800 dark:to-gray-900">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Sessions ({sessions.length})</h2>
               </div>
+
               <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[calc(100vh-280px)] overflow-y-auto flex-1">
                 {sessions.map((session) => (
                   <div
@@ -399,7 +408,6 @@ function Sessions() {
                     }`}
                   >
                     <button
-                      type="button"
                       onClick={() => handleSelectSession(session)}
                       className="flex-1 text-left space-y-1"
                     >
@@ -435,9 +443,9 @@ function Sessions() {
                         </div>
                       )}
                     </button>
+
                     <div className="flex items-center gap-1">
                       <button
-                        type="button"
                         onClick={() => handleSelectSession(session)}
                         className="p-2 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors"
                         title="Play session"
@@ -445,7 +453,6 @@ function Sessions() {
                         <Play className="h-4 w-4" />
                       </button>
                       <button
-                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleOpenInfo(session);
@@ -456,7 +463,6 @@ function Sessions() {
                         <Info className="h-4 w-4" />
                       </button>
                       <button
-                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setSessionToDelete(session);
@@ -470,30 +476,49 @@ function Sessions() {
                   </div>
                 ))}
 
-                {/* Load More Pagination Button */}
+                {/* Beautiful Hover Auto Load Button */}
                 {hasMore && (
-                  <div className="p-4 text-center">
+                  <div className="p-6">
                     <button
-                      type="button"
+                      onMouseEnter={startHoverCountdown}
+                      onMouseLeave={cancelHoverCountdown}
                       onClick={handleLoadMore}
                       disabled={loadingMore}
-                      className="w-full py-2 px-4 border border-gray-300 dark:border-gray-700 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                      className="group relative w-full py-4 px-6 bg-gradient-to-r from-indigo-600 via-purple-600 to-violet-600 
+                                 hover:from-indigo-700 hover:via-purple-700 hover:to-violet-700 
+                                 text-white font-medium rounded-2xl overflow-hidden transition-all duration-300 
+                                 flex items-center justify-center gap-3 shadow-lg shadow-indigo-500/30
+                                 disabled:opacity-70 disabled:cursor-not-allowed active:scale-[0.985]"
                     >
-                      {loadingMore ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600 dark:border-indigo-400" />
-                      ) : (
-                        <>
-                          <ChevronDown className="h-4 w-4" />
-                          Load More Sessions
-                        </>
+                      <div className="flex items-center gap-3 relative z-10">
+                        {loadingMore ? (
+                          <div className="animate-spin rounded-full h-5 w-5 border-2 border-white/30 border-t-white" />
+                        ) : (
+                          <ChevronDown className="h-5 w-5 transition-transform group-hover:-translate-y-0.5" />
+                        )}
+                        <span className="text-base">
+                          {loadingMore ? 'Loading more sessions...' : 'Load More Sessions'}
+                        </span>
+                      </div>
+
+                      {/* Countdown Overlay */}
+                      {hoverCountdown !== null && !loadingMore && (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center backdrop-blur-sm rounded-2xl z-20">
+                          <div className="text-4xl font-mono font-bold tracking-widest text-white drop-shadow-lg animate-pulse">
+                            {hoverCountdown}
+                          </div>
+                        </div>
                       )}
                     </button>
+                    <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-3">
+                      Hover for auto-load • Click to load now
+                    </p>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Replay Player Column */}
+            {/* Replay Player */}
             <div className="lg:col-span-2" ref={wrapperRef}>
               {fetchingReplay ? (
                 <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm p-12 flex flex-col items-center justify-center min-h-[400px]">
@@ -533,7 +558,6 @@ function Sessions() {
                           </div>
                         )}
                         <button
-                          type="button"
                           onClick={() => setSessionToDelete(selectedSession)}
                           className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 rounded-lg transition-colors"
                         >
@@ -597,7 +621,6 @@ function Sessions() {
             </p>
             <div className="flex justify-end gap-3">
               <button
-                type="button"
                 onClick={() => setSessionToDelete(null)}
                 disabled={deleting}
                 className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-50"
@@ -605,7 +628,6 @@ function Sessions() {
                 Cancel
               </button>
               <button
-                type="button"
                 onClick={() => handleDeleteSession(sessionToDelete)}
                 disabled={deleting}
                 className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
@@ -627,7 +649,7 @@ function Sessions() {
                   <Info className="h-4 w-4 text-slate-300" />
                   <h2 className="font-semibold">Session Details</h2>
                 </div>
-                <button type="button" onClick={() => setSessionInfo(null)} className="p-1.5 hover:bg-white/10 rounded-lg">
+                <button onClick={() => setSessionInfo(null)} className="p-1.5 hover:bg-white/10 rounded-lg">
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -654,8 +676,8 @@ function Sessions() {
               </div>
             </div>
             <div className="px-4 py-3 bg-slate-50 dark:bg-gray-800/50 border-t border-slate-100 dark:border-gray-800 flex items-center gap-2">
-              <button type="button" onClick={() => setSessionInfo(null)} className="flex-1 py-2 text-sm text-slate-600 dark:text-gray-400 hover:bg-white rounded-lg">Close</button>
-              <button type="button" onClick={() => { setSelectedSession(sessionInfo); setSessionInfo(null); }} className="flex-1 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1">
+              <button onClick={() => setSessionInfo(null)} className="flex-1 py-2 text-sm text-slate-600 dark:text-gray-400 hover:bg-white rounded-lg">Close</button>
+              <button onClick={() => { setSelectedSession(sessionInfo); setSessionInfo(null); }} className="flex-1 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1">
                 <Play className="h-3.5 w-3.5" /> Play
               </button>
             </div>
