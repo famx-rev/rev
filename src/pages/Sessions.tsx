@@ -48,8 +48,12 @@ function Sessions() {
   const [deleting, setDeleting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<Session | null>(null);
 
-  // Persistent merge map across pages so "load more" doesn't lose earlier data
+  // Persistent merge map across pages so infinite scroll doesn't lose earlier data
   const sessionMapRef = useRef<Map<string, Session>>(new Map());
+  // Sentinel element at the bottom of the list — when it becomes visible, load the next page
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  // Guards against the IntersectionObserver firing multiple overlapping fetches
+  const fetchingRef = useRef(false);
 
   const rebuildSessionsFromMap = useCallback(() => {
     const merged = Array.from(sessionMapRef.current.values())
@@ -104,6 +108,8 @@ function Sessions() {
 
   const fetchPage = useCallback(async (currentOffset: number, isInitial = false) => {
     if (!selectedProject) return;
+    if (fetchingRef.current) return; // already fetching — avoid duplicate overlapping requests
+    fetchingRef.current = true;
     if (isInitial) setLoading(true); else setLoadingMore(true);
 
     try {
@@ -125,6 +131,7 @@ function Sessions() {
     } finally {
       setLoading(false);
       setLoadingMore(false);
+      fetchingRef.current = false;
     }
   }, [selectedProject, mergeRawSessions, rebuildSessionsFromMap]);
 
@@ -144,6 +151,30 @@ function Sessions() {
     fetchPage(0, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject]);
+
+  // Infinite scroll: watch the sentinel div at the bottom of the list.
+  // When it scrolls into view, automatically fetch the next page.
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting && hasMore && !fetchingRef.current && !loading) {
+          fetchPage(offset);
+        }
+      },
+      {
+        root: sentinel.closest('.overflow-y-auto'), // observe within the scrollable list container
+        rootMargin: '100px', // start loading a bit before it's fully visible
+        threshold: 0,
+      }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [offset, hasMore, loading, fetchPage]);
 
   // Cleanup function for player
   const cleanupPlayer = useCallback(() => {
@@ -492,14 +523,18 @@ function Sessions() {
                   </div>
                 ))}
                 {hasMore && (
-                  <div className="p-4">
-                    <button
-                      onClick={() => fetchPage(offset)}
-                      disabled={loadingMore}
-                      className="w-full py-2 text-sm text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors disabled:opacity-50"
-                    >
-                      {loadingMore ? 'Loading...' : 'Load more sessions'}
-                    </button>
+                  <div ref={loadMoreSentinelRef} className="p-4 flex items-center justify-center">
+                    {loadingMore ? (
+                      <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-gray-500">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500 dark:border-indigo-400" />
+                        Loading more sessions...
+                      </div>
+                    ) : (
+                      // Invisible placeholder — its presence in the DOM is what the
+                      // IntersectionObserver watches; it triggers the next fetch as
+                      // soon as it scrolls into view, no click needed.
+                      <div className="h-4" />
+                    )}
                   </div>
                 )}
               </div>
