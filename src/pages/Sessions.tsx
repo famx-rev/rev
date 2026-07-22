@@ -24,7 +24,7 @@ function Sessions() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [offset, setOffset] = useState(0);
-  const PAGE_LIMIT = 50;
+  const PAGE_LIMIT = 200;
 
   const [selectedSession, setSelectedSession] = useState<SessionMeta | null>(null);
   const [fetchingReplay, setFetchingReplay] = useState(false);
