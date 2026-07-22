@@ -29,10 +29,15 @@ interface RawSession {
   recordedAt: string;
 }
 
+const PAGE_SIZE = 25; // small batch size — session_data rows can carry heavy canvas snapshots
+
 function Sessions() {
   const { selectedProject } = useProject();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playerDimensions, setPlayerDimensions] = useState({ width: 1024, height: 576 });
@@ -43,75 +48,101 @@ function Sessions() {
   const [deleting, setDeleting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<Session | null>(null);
 
+  // Persistent merge map across pages so "load more" doesn't lose earlier data
+  const sessionMapRef = useRef<Map<string, Session>>(new Map());
+
+  const rebuildSessionsFromMap = useCallback(() => {
+    const merged = Array.from(sessionMapRef.current.values())
+      .filter(s => s.events.length >= 2) // need at least 2 events for a valid recording
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    setSessions(merged);
+  }, []);
+
+  const mergeRawSessions = useCallback((rawSessions: RawSession[]) => {
+    rawSessions.forEach((raw: RawSession) => {
+      // Parse events if they are strings
+      const parsedEvents = raw.events
+        .map((e: any) => {
+          if (typeof e === 'string') {
+            try {
+              return JSON.parse(e);
+            } catch {
+              return null;
+            }
+          }
+          return e;
+        })
+        .filter((e: any) => e !== null && e.type !== undefined && e.timestamp !== undefined)
+        .sort((a: any, b: any) => a.timestamp - b.timestamp);
+
+      const existing = sessionMapRef.current.get(raw.sessionId);
+      if (existing) {
+        // Merge events, avoiding duplicates by timestamp
+        const existingTimestamps = new Set(existing.events.map((e: any) => e.timestamp));
+        const newEvents = parsedEvents.filter((e: any) => !existingTimestamps.has(e.timestamp));
+        existing.events = [...existing.events, ...newEvents].sort((a, b) => a.timestamp - b.timestamp);
+        // Update timestamp to earliest
+        if (new Date(raw.timestamp) < new Date(existing.timestamp)) {
+          existing.timestamp = raw.timestamp;
+        }
+      } else {
+        sessionMapRef.current.set(raw.sessionId, {
+          sessionId: raw.sessionId,
+          visitorId: raw.visitorId,
+          timestamp: raw.timestamp,
+          url: raw.url,
+          userAgent: raw.userAgent,
+          screenResolution: raw.screenResolution,
+          viewportWidth: raw.viewportWidth,
+          viewportHeight: raw.viewportHeight,
+          ip: raw.ip,
+          events: parsedEvents,
+        });
+      }
+    });
+  }, []);
+
+  const fetchPage = useCallback(async (currentOffset: number, isInitial = false) => {
+    if (!selectedProject) return;
+    if (isInitial) setLoading(true); else setLoadingMore(true);
+
+    try {
+      const res = await fetch(
+        `https://api1-orpin.vercel.app/api/${selectedProject.id}/sessions?limit=${PAGE_SIZE}&offset=${currentOffset}`
+      );
+      const data = await res.json();
+      const rawSessions: RawSession[] = data.sessions || [];
+
+      mergeRawSessions(rawSessions);
+      rebuildSessionsFromMap();
+
+      setHasMore(rawSessions.length === PAGE_SIZE);
+      setOffset(currentOffset + PAGE_SIZE);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching sessions:', err);
+      setError('Failed to load sessions');
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [selectedProject, mergeRawSessions, rebuildSessionsFromMap]);
+
   useEffect(() => {
+    // Reset merge state whenever the selected project changes
+    sessionMapRef.current = new Map();
+    setSessions([]);
+    setOffset(0);
+    setHasMore(true);
+    setSelectedSession(null);
+
     if (!selectedProject) {
       setLoading(false);
       return;
     }
 
-    fetch(`https://api1-orpin.vercel.app/api/${selectedProject.id}/sessions`)
-      .then(res => res.json())
-      .then(data => {
-        const rawSessions = data.sessions || [];
-
-        // Group sessions by sessionId and merge events
-        const sessionMap = new Map<string, Session>();
-
-        rawSessions.forEach((raw: RawSession) => {
-          // Parse events if they are strings
-          const parsedEvents = raw.events.map((e: any) => {
-            if (typeof e === 'string') {
-              try {
-                return JSON.parse(e);
-              } catch {
-                return null;
-              }
-            }
-            return e;
-          }).filter((e: any) => e !== null && e.type !== undefined && e.timestamp !== undefined);
-
-          // Sort events by timestamp
-          parsedEvents.sort((a: any, b: any) => a.timestamp - b.timestamp);
-
-          const existing = sessionMap.get(raw.sessionId);
-          if (existing) {
-            // Merge events, avoiding duplicates by timestamp
-            const existingTimestamps = new Set(existing.events.map((e: any) => e.timestamp));
-            const newEvents = parsedEvents.filter((e: any) => !existingTimestamps.has(e.timestamp));
-            existing.events = [...existing.events, ...newEvents].sort((a, b) => a.timestamp - b.timestamp);
-            // Update timestamp to earliest
-            if (new Date(raw.timestamp) < new Date(existing.timestamp)) {
-              existing.timestamp = raw.timestamp;
-            }
-          } else {
-            sessionMap.set(raw.sessionId, {
-              sessionId: raw.sessionId,
-              visitorId: raw.visitorId,
-              timestamp: raw.timestamp,
-              url: raw.url,
-              userAgent: raw.userAgent,
-              screenResolution: raw.screenResolution,
-              viewportWidth: raw.viewportWidth,
-              viewportHeight: raw.viewportHeight,
-              ip: raw.ip,
-              events: parsedEvents,
-            });
-          }
-        });
-
-        // Convert to array and sort by timestamp
-        const mergedSessions = Array.from(sessionMap.values())
-          .filter(s => s.events.length >= 2) // Need at least 2 events for a valid recording
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-        setSessions(mergedSessions);
-        setLoading(false);
-      })
-      .catch(error => {
-        console.error('Error fetching sessions:', error);
-        setError('Failed to load sessions');
-        setLoading(false);
-      });
+    fetchPage(0, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject]);
 
   // Cleanup function for player
@@ -307,6 +338,7 @@ function Sessions() {
         { method: 'DELETE' }
       );
       if (res.ok) {
+        sessionMapRef.current.delete(session.sessionId);
         setSessions(prev => prev.filter(s => s.sessionId !== session.sessionId));
         if (selectedSession?.sessionId === session.sessionId) {
           setSelectedSession(null);
@@ -459,6 +491,17 @@ function Sessions() {
                     </div>
                   </div>
                 ))}
+                {hasMore && (
+                  <div className="p-4">
+                    <button
+                      onClick={() => fetchPage(offset)}
+                      disabled={loadingMore}
+                      className="w-full py-2 text-sm text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {loadingMore ? 'Loading...' : 'Load more sessions'}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
