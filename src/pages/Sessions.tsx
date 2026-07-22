@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Play, Calendar, Monitor, User, Clock, Globe, MousePointer, MapPin, Trash2, AlertTriangle, X, Info, ExternalLink, Chrome } from 'lucide-react';
+import { Play, Calendar, Monitor, User, Clock, Globe, MousePointer, MapPin, Trash2, AlertTriangle, X, Info, ExternalLink, Chrome, ChevronDown } from 'lucide-react';
 import { useProject } from '../App';
 
 interface SessionMeta {
@@ -21,66 +21,88 @@ function Sessions() {
   const { selectedProject } = useProject();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const PAGE_LIMIT = 50;
+
   const [selectedSession, setSelectedSession] = useState<SessionMeta | null>(null);
   const [fetchingReplay, setFetchingReplay] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [playerDimensions, setPlayerDimensions] = useState({ width: 1024, height: 576 });
+
   const playerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+
   const [sessionToDelete, setSessionToDelete] = useState<SessionMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<SessionMeta | null>(null);
 
-  // Fetch Session List (Metadata)
-  useEffect(() => {
-    if (!selectedProject) {
-      setLoading(false);
-      return;
-    }
+  // Fetch initial session list metadata
+  const fetchSessions = useCallback(async (currentOffset: number, isInitial = false) => {
+    if (!selectedProject) return;
 
-    setLoading(true);
+    if (isInitial) setLoading(true);
+    else setLoadingMore(true);
+
     setError(null);
 
-    fetch(`https://api1-orpin.vercel.app/api/custom/${selectedProject.id}/session`)
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch session list');
-        return res.json();
-      })
-      .then((data) => {
-        const rawRows: SessionMeta[] = data.sessions || [];
+    try {
+      const res = await fetch(
+        `https://api1-orpin.vercel.app/api/custom/${selectedProject.id}/session?limit=${PAGE_LIMIT}&offset=${currentOffset}`
+      );
+      if (!res.ok) throw new Error('Failed to fetch sessions');
 
-        // Deduplicate/Group rows by sessionId taking the earliest timestamp metadata
-        const sessionMap = new Map<string, SessionMeta>();
+      const data = await res.json();
+      const fetchedRows: SessionMeta[] = data.sessions || [];
 
-        rawRows.forEach((row) => {
-          if (!row.sessionId) return;
+      // Check if we reached the end of records
+      if (fetchedRows.length < PAGE_LIMIT) {
+        setHasMore(false);
+      } else {
+        setHasMore(true);
+      }
 
-          if (!sessionMap.has(row.sessionId)) {
-            sessionMap.set(row.sessionId, { ...row });
-          } else {
-            const existing = sessionMap.get(row.sessionId)!;
-            if (new Date(row.timestamp) < new Date(existing.timestamp)) {
-              sessionMap.set(row.sessionId, { ...row });
-            }
+      setSessions((prev) => {
+        const combined = isInitial ? fetchedRows : [...prev, ...fetchedRows];
+
+        // Deduplicate rows by sessionId
+        const map = new Map<string, SessionMeta>();
+        combined.forEach((item) => {
+          if (item.sessionId && !map.has(item.sessionId)) {
+            map.set(item.sessionId, item);
           }
         });
 
-        const sortedList = Array.from(sessionMap.values()).sort(
+        return Array.from(map.values()).sort(
           (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
         );
-
-        setSessions(sortedList);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error('Error fetching sessions:', err);
-        setError('Failed to load sessions');
-        setLoading(false);
       });
+    } catch (err) {
+      console.error('Error loading sessions:', err);
+      setError('Failed to load sessions');
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
   }, [selectedProject]);
 
-  // Load Complete Session Replay with Events on Demand
+  useEffect(() => {
+    setOffset(0);
+    setHasMore(true);
+    setSelectedSession(null);
+    fetchSessions(0, true);
+  }, [selectedProject, fetchSessions]);
+
+  const handleLoadMore = () => {
+    if (loadingMore || !hasMore) return;
+    const nextOffset = offset + PAGE_LIMIT;
+    setOffset(nextOffset);
+    fetchSessions(nextOffset, false);
+  };
+
+  // Fetch complete event payload on demand when playing/viewing details
   const loadFullSession = async (session: SessionMeta): Promise<SessionMeta | null> => {
     if (session.events && session.events.length > 0) return session;
 
@@ -89,20 +111,15 @@ function Sessions() {
       const res = await fetch(
         `https://api1-orpin.vercel.app/api/custom/${selectedProject?.id}/session/${session.sessionId}`
       );
-      if (!res.ok) throw new Error('Failed to load replay data');
+      if (!res.ok) throw new Error('Failed to fetch replay data');
 
       const fullData = await res.json();
-
-      // Parse & sanitize events array
       const rawEvents = fullData.events || [];
+
       const parsedEvents = rawEvents
         .map((e: any) => {
           if (typeof e === 'string') {
-            try {
-              return JSON.parse(e);
-            } catch {
-              return null;
-            }
+            try { return JSON.parse(e); } catch { return null; }
           }
           return e;
         })
@@ -115,7 +132,6 @@ function Sessions() {
         events: parsedEvents,
       };
 
-      // Update state cache
       setSessions((prev) =>
         prev.map((s) => (s.sessionId === session.sessionId ? updatedSession : s))
       );
@@ -123,7 +139,7 @@ function Sessions() {
       setFetchingReplay(false);
       return updatedSession;
     } catch (err) {
-      console.error('Error loading replay:', err);
+      console.error('Error loading replay events:', err);
       setError('Failed to load session replay data');
       setFetchingReplay(false);
       return null;
@@ -144,7 +160,7 @@ function Sessions() {
     }
   };
 
-  // Cleanup function for player instance
+  // Clean up Svelte instance for rrweb player
   const cleanupPlayer = useCallback(() => {
     if (playerRef.current) {
       try {
@@ -154,13 +170,12 @@ function Sessions() {
           playerRef.current.destroy();
         }
       } catch (e) {
-        console.warn('Error destroying player:', e);
+        console.warn('Error destroying player instance:', e);
       }
       playerRef.current = null;
     }
   }, []);
 
-  // Responsive player dimension handler
   const calculateDimensions = useCallback(() => {
     if (!wrapperRef.current) return { width: 1024, height: 576 };
     const wrapperWidth = wrapperRef.current.clientWidth;
@@ -171,23 +186,15 @@ function Sessions() {
   }, []);
 
   useEffect(() => {
-    const handleResize = () => {
-      const newDimensions = calculateDimensions();
-      setPlayerDimensions(newDimensions);
-    };
-
+    const handleResize = () => setPlayerDimensions(calculateDimensions());
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [calculateDimensions, selectedSession]);
 
-  useEffect(() => {
-    return () => {
-      cleanupPlayer();
-    };
-  }, [cleanupPlayer]);
+  useEffect(() => cleanupPlayer, [cleanupPlayer]);
 
-  // Mount rrweb Player
+  // Render rrweb Player
   useEffect(() => {
     if (!selectedSession || !containerRef.current) return;
 
@@ -204,7 +211,6 @@ function Sessions() {
         if (cancelled || !containerRef.current) return;
 
         const events = selectedSession.events || [];
-
         const orderedEvents = events
           .filter((e: any) => e.type === 2 || e.type === 3 || e.type === 4)
           .sort((a: any, b: any) => a.timestamp - b.timestamp);
@@ -232,13 +238,6 @@ function Sessions() {
             recordedWidth = w;
             recordedHeight = h;
           }
-        }
-
-        if (fullSnapshot.data?.node?.initialScroll?.width) {
-          recordedWidth = fullSnapshot.data.node.initialScroll.width;
-        }
-        if (fullSnapshot.data?.node?.initialScroll?.height) {
-          recordedHeight = fullSnapshot.data.node.initialScroll.height;
         }
 
         const containerWidth = containerRef.current.clientWidth || 800;
@@ -276,7 +275,7 @@ function Sessions() {
         if (!cancelled) setPlayerDimensions({ width: playerWidth, height: playerHeight });
       } catch (error) {
         if (cancelled) return;
-        console.error('Error initializing player:', error);
+        console.error('Error mounting player:', error);
         if (containerRef.current) {
           containerRef.current.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: center; height: 300px; color: #ef4444; background: #fef2f2; border-radius: 8px;">
@@ -294,7 +293,6 @@ function Sessions() {
     };
   }, [selectedSession, cleanupPlayer]);
 
-  // Handle Delete Action
   const handleDeleteSession = async (session: SessionMeta) => {
     if (!selectedProject) return;
     setDeleting(true);
@@ -326,18 +324,13 @@ function Sessions() {
     if (!events || events.length < 2) return '0s';
     const timestamps = events.map((e: any) => e.timestamp).filter((t: any) => typeof t === 'number');
     if (timestamps.length < 2) return '0s';
-    const start = Math.min(...timestamps);
-    const end = Math.max(...timestamps);
-    const seconds = Math.floor((end - start) / 1000);
-    if (seconds < 0) return '0s';
+    const seconds = Math.floor((Math.max(...timestamps) - Math.min(...timestamps)) / 1000);
+    if (seconds <= 0) return '0s';
     if (seconds < 60) return `${seconds}s`;
     return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   };
 
-  const formatEventCount = (events?: any[]) => {
-    if (!events) return 0;
-    return events.length;
-  };
+  const formatEventCount = (events?: any[]) => events ? events.length : 0;
 
   if (!selectedProject) {
     return (
@@ -378,12 +371,12 @@ function Sessions() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Sessions List */}
-            <div className="lg:col-span-1 bg-white dark:bg-gray-900 rounded-xl shadow-sm overflow-hidden">
+            {/* Session List Column */}
+            <div className="lg:col-span-1 bg-white dark:bg-gray-900 rounded-xl shadow-sm overflow-hidden flex flex-col">
               <div className="p-4 border-b border-gray-200 dark:border-gray-700">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Sessions ({sessions.length})</h2>
               </div>
-              <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[calc(100vh-250px)] overflow-y-auto">
+              <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[calc(100vh-280px)] overflow-y-auto flex-1">
                 {sessions.map((session) => (
                   <div
                     key={session.sessionId}
@@ -458,10 +451,30 @@ function Sessions() {
                     </div>
                   </div>
                 ))}
+
+                {/* Load More Pagination Button */}
+                {hasMore && (
+                  <div className="p-4 text-center">
+                    <button
+                      onClick={handleLoadMore}
+                      disabled={loadingMore}
+                      className="w-full py-2 px-4 border border-gray-300 dark:border-gray-700 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                    >
+                      {loadingMore ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600 dark:border-indigo-400" />
+                      ) : (
+                        <>
+                          <ChevronDown className="h-4 w-4" />
+                          Load More Sessions
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Session Player */}
+            {/* Replay Player Column */}
             <div className="lg:col-span-2" ref={wrapperRef}>
               {fetchingReplay ? (
                 <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm p-12 flex flex-col items-center justify-center min-h-[400px]">
@@ -470,7 +483,6 @@ function Sessions() {
                 </div>
               ) : selectedSession ? (
                 <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm overflow-hidden">
-                  {/* Session Header */}
                   <div className="p-6 border-b border-gray-100 dark:border-gray-800 bg-gradient-to-r from-gray-50 dark:from-gray-800/50 to-white dark:to-gray-900">
                     <div className="flex flex-wrap items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
@@ -489,7 +501,7 @@ function Sessions() {
                       <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
                           <Monitor className="h-4 w-4 text-gray-500 dark:text-gray-400" />
-                          <span className="text-sm text-gray-700 dark:text-gray-300">{selectedSession.screenResolution}</span>
+                          <span className="text-sm text-gray-700 dark:text-gray-300">{selectedSession.screenResolution || 'N/A'}</span>
                         </div>
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
                           <MousePointer className="h-4 w-4 text-gray-500 dark:text-gray-400" />
@@ -501,12 +513,6 @@ function Sessions() {
                             <span className="text-sm text-emerald-700 dark:text-emerald-400 font-mono">{selectedSession.ip}</span>
                           </div>
                         )}
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/40 rounded-lg">
-                          <User className="h-4 w-4 text-indigo-500 dark:text-indigo-400" />
-                          <span className="text-sm text-indigo-700 dark:text-indigo-400 font-mono">
-                            {selectedSession.visitorId ? selectedSession.visitorId.slice(0, 8) : 'Unknown'}
-                          </span>
-                        </div>
                         <button
                           onClick={() => setSessionToDelete(selectedSession)}
                           className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 rounded-lg transition-colors"
@@ -518,18 +524,14 @@ function Sessions() {
                     </div>
                   </div>
 
-                  {/* Player Container */}
                   <div className="p-4 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
                     <div
                       ref={containerRef}
                       className="w-full bg-white dark:bg-gray-800 rounded-lg"
                       style={{ minHeight: '450px' }}
-                    >
-                      {/* Player mounted here */}
-                    </div>
+                    />
                   </div>
 
-                  {/* Session Info Footer */}
                   <div className="px-6 py-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-4 text-gray-600 dark:text-gray-400">
@@ -570,26 +572,9 @@ function Sessions() {
               </div>
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Delete Session Recording?</h2>
             </div>
-
             <p className="text-gray-600 dark:text-gray-300 mb-6">
               This will permanently delete this session recording and all its event data. This action cannot be undone.
             </p>
-
-            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3 mb-6 text-sm">
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                <Clock className="h-4 w-4" />
-                <span>{new Date(sessionToDelete.timestamp).toLocaleString()}</span>
-              </div>
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400 mt-1">
-                <User className="h-4 w-4" />
-                <span className="font-mono">{sessionToDelete.visitorId ? `${sessionToDelete.visitorId.slice(0, 8)}...` : 'Unknown'}</span>
-              </div>
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400 mt-1">
-                <MousePointer className="h-4 w-4" />
-                <span>{formatEventCount(sessionToDelete.events)} events</span>
-              </div>
-            </div>
-
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setSessionToDelete(null)}
@@ -601,151 +586,55 @@ function Sessions() {
               <button
                 onClick={() => handleDeleteSession(sessionToDelete)}
                 disabled={deleting}
-                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 dark:hover:bg-red-700 transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
               >
-                {deleting ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-                    Deleting...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="h-4 w-4" />
-                    Delete Session
-                  </>
-                )}
+                {deleting ? 'Deleting...' : 'Delete Session'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Session Info Modal */}
+      {/* Session Details Modal */}
       {sessionInfo && (
         <div className="fixed inset-0 bg-black/40 dark:bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
-            {/* Header */}
             <div className="bg-gradient-to-r from-slate-800 to-slate-700 px-5 py-4 text-white">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Info className="h-4 w-4 text-slate-300" />
                   <h2 className="font-semibold">Session Details</h2>
                 </div>
-                <button
-                  onClick={() => setSessionInfo(null)}
-                  className="p-1.5 hover:bg-white/10 rounded-lg transition-colors"
-                >
+                <button onClick={() => setSessionInfo(null)} className="p-1.5 hover:bg-white/10 rounded-lg">
                   <X className="h-4 w-4" />
                 </button>
               </div>
             </div>
-
-            {/* Content */}
             <div className="p-4 space-y-3 text-sm">
-              {/* URL */}
               {sessionInfo.url && (
                 <div className="bg-slate-50 dark:bg-gray-800/50 rounded-xl p-3">
-                  <div className="flex items-center gap-2 text-slate-500 dark:text-gray-500 mb-1">
-                    <Globe className="h-3.5 w-3.5" />
-                    <span className="text-xs font-medium uppercase tracking-wide">Website</span>
-                  </div>
-                  <a
-                    href={sessionInfo.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 break-all text-xs font-medium flex items-center gap-1"
-                  >
-                    {sessionInfo.url.length > 50 ? sessionInfo.url.slice(0, 50) + '...' : sessionInfo.url}
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Website</span>
+                  <a href={sessionInfo.url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 break-all text-xs font-medium flex items-center gap-1 mt-1">
+                    {sessionInfo.url}
                     <ExternalLink className="h-3 w-3 flex-shrink-0" />
                   </a>
                 </div>
               )}
-
-              {/* Visitor & Time Row */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-slate-50 dark:bg-gray-800/50 rounded-xl p-3">
-                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-500 mb-1">
-                    <User className="h-3.5 w-3.5" />
-                    <span className="text-xs font-medium uppercase tracking-wide">Visitor</span>
-                  </div>
-                  <p className="font-mono text-xs text-slate-700 dark:text-gray-300">
-                    {sessionInfo.visitorId ? `${sessionInfo.visitorId.slice(0, 12)}...` : 'Unknown'}
-                  </p>
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Visitor</span>
+                  <p className="font-mono text-xs text-slate-700 dark:text-gray-300 mt-1">{sessionInfo.visitorId ? `${sessionInfo.visitorId.slice(0, 10)}...` : 'Unknown'}</p>
                 </div>
                 <div className="bg-slate-50 dark:bg-gray-800/50 rounded-xl p-3">
-                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-500 mb-1">
-                    <Clock className="h-3.5 w-3.5" />
-                    <span className="text-xs font-medium uppercase tracking-wide">Time</span>
-                  </div>
-                  <p className="text-xs text-slate-700 dark:text-gray-300">{new Date(sessionInfo.timestamp).toLocaleDateString()}</p>
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">IP</span>
+                  <p className="font-mono text-xs text-slate-700 dark:text-gray-300 mt-1">{sessionInfo.ip || 'N/A'}</p>
                 </div>
               </div>
-
-              {/* IP & Device Row */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 dark:bg-gray-800/50 rounded-xl p-3">
-                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-500 mb-1">
-                    <MapPin className="h-3.5 w-3.5" />
-                    <span className="text-xs font-medium uppercase tracking-wide">IP</span>
-                  </div>
-                  <p className="font-mono text-xs text-slate-700 dark:text-gray-300">{sessionInfo.ip || 'N/A'}</p>
-                </div>
-                <div className="bg-slate-50 dark:bg-gray-800/50 rounded-xl p-3">
-                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-500 mb-1">
-                    <Monitor className="h-3.5 w-3.5" />
-                    <span className="text-xs font-medium uppercase tracking-wide">Screen</span>
-                  </div>
-                  <p className="text-xs text-slate-700 dark:text-gray-300">{sessionInfo.screenResolution || 'N/A'}</p>
-                </div>
-              </div>
-
-              {/* Events & Duration Row */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-emerald-50 dark:bg-emerald-950/40 rounded-xl p-3">
-                  <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 mb-1">
-                    <MousePointer className="h-3.5 w-3.5" />
-                    <span className="text-xs font-medium uppercase tracking-wide">Events</span>
-                  </div>
-                  <p className="font-semibold text-emerald-700 dark:text-emerald-400">{formatEventCount(sessionInfo.events)}</p>
-                </div>
-                <div className="bg-indigo-50 dark:bg-indigo-950/40 rounded-xl p-3">
-                  <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 mb-1">
-                    <Play className="h-3.5 w-3.5" />
-                    <span className="text-xs font-medium uppercase tracking-wide">Duration</span>
-                  </div>
-                  <p className="font-semibold text-indigo-700 dark:text-indigo-400">{formatDuration(sessionInfo.events)}</p>
-                </div>
-              </div>
-
-              {/* User Agent */}
-              {sessionInfo.userAgent && (
-                <details className="bg-slate-50 dark:bg-gray-800/50 rounded-xl">
-                  <summary className="px-3 py-2.5 cursor-pointer text-xs font-medium text-slate-500 dark:text-gray-500 uppercase tracking-wide flex items-center gap-1.5 hover:text-slate-700 dark:hover:text-gray-300">
-                    <Chrome className="h-3.5 w-3.5" />
-                    User Agent
-                  </summary>
-                  <p className="px-3 pb-3 text-xs text-slate-600 dark:text-gray-400 break-all">{sessionInfo.userAgent}</p>
-                </details>
-              )}
             </div>
-
-            {/* Footer */}
             <div className="px-4 py-3 bg-slate-50 dark:bg-gray-800/50 border-t border-slate-100 dark:border-gray-800 flex items-center gap-2">
-              <button
-                onClick={() => setSessionInfo(null)}
-                className="flex-1 py-2 text-sm text-slate-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-colors"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => {
-                  setSelectedSession(sessionInfo);
-                  setSessionInfo(null);
-                }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 dark:hover:bg-indigo-700 transition-colors"
-              >
-                <Play className="h-3.5 w-3.5" />
-                Play
+              <button onClick={() => setSessionInfo(null)} className="flex-1 py-2 text-sm text-slate-600 dark:text-gray-400 hover:bg-white rounded-lg">Close</button>
+              <button onClick={() => { setSelectedSession(sessionInfo); setSessionInfo(null); }} className="flex-1 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1">
+                <Play className="h-3.5 w-3.5" /> Play
               </button>
             </div>
           </div>
